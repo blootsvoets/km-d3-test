@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+
+.node {
+  stroke: #fff;
+  stroke-width: 1.5px;
+}
+
+.link {
+  stroke: #999;
+  stroke-opacity: .6;
+}
+
+.y.axis line, .y.axis path {
+  fill: none;
+  stroke: #000;
+}
+
+</style>
+</head>
+<body>
+<script src="/d3.min.js"></script>
+<script src="/jquery.min.js"></script>
+Agents: <input type="number" value="15" id="num_agents" onchange="javascript:triggerUpdateNetwork()"/><br/>
+Wifi stations: <input type="number" value="5" id="num_wifi" onchange="javascript:triggerUpdateNetwork()"/><br/>
+Seed: <input type="number" value="0" id="seed_num" onchange="javascript:triggerUpdateNetwork()"/><br/>
+<script>
+
+var scale = 400;
+var margin = 50;
+
+function scalePoint(el) {
+  el.x = el.x * scale + margin;
+  el.y = el.y * scale + margin;
+  return el;
+}
+
+var width = 500,
+    height = 500;
+
+var errors = [[], []];
+var t = 0;
+
+function addError(error, calcerror) {
+  if (errors[0].length > 0 && errors[0][errors[0].length - 1].y.toFixed(4) === error.toFixed(4)) return;
+
+  errors[0].push({x: t, y: error});
+  errors[1].push({x: t, y: calcerror});
+  t++;
+
+  if (errors[0].length >= 500) {
+    errors[0].shift();
+    errors[1].shift();
+  }
+  setTimeout(function(){ render(errors); }, 0);
+}
+
+var color = d3.scale.category20();
+
+var force = d3.layout.force()
+    .charge(-0.05*scale)
+    .gravity(0)
+    .linkDistance(0.17*scale)
+    .chargeDistance(0.225*scale)
+    .size([width, height]);
+
+var svg = d3.select("body").append("svg")
+    .attr("width", width).attr("height", height)
+
+svg.append("svg:defs").selectAll("marker")
+    .data(["end"])      // Different link/path types can be defined here
+  .enter().append("svg:marker")    // This section adds in the arrows
+    .attr("id", String)
+    .attr("viewBox", "0 -5 10 10")
+    .attr("refX", 15)
+    .attr("refY", -1.5)
+    .attr("markerWidth", 7)
+    .attr("markerHeight", 7)
+    .attr("orient", "auto")
+  .append("svg:path")
+    .attr("d", "M0,-5L10,0L0,5");
+
+d3.json("/room", function(error, shape) {
+  if (error) throw error;
+  
+  svg.selectAll("polygon")
+    .data([shape.polygon.map(scalePoint)])
+  .enter().append("polygon")
+    .attr("points",function(ds) { 
+        return ds.map(function(d) {
+          return [d.x,d.y].join(","); }).join(" ");
+        })
+    .attr("stroke", "black")
+    .attr("fill", "none")
+    .attr("stroke-width", 2);
+});
+
+function triggerUpdateNetwork() {
+  force.stop();
+  setTimeout(updateNetwork, 0);
+}
+
+var prevUrl;
+
+function updateNetwork() {
+  var networkUrl = "/network/" + $("#num_agents").val() + "/" + $("#num_wifi").val() + "/" + $("#seed_num").val();
+  if (networkUrl === prevUrl) {
+    return;
+  }
+  prevUrl = networkUrl;
+  d3.json(networkUrl, function(error, graph) {
+    if (error) throw error;
+  
+    var emptyNodes = graph.nodes
+        .map(function (el) {
+            if (el.nodetype == 1) return {id: el.id, nodetype: el.nodetype, x: el.calculated_x * scale + margin, y: el.calculated_y * scale + margin};
+            else return el;
+        });
+    var realNodes = graph.nodes.map(scalePoint)
+      .filter(function (el) { return el.nodetype == 1; })
+      .map(function(el) { return {
+          x: el.x,
+          y: el.y,
+          id: el.id,
+          nodetype: 0,
+          calculated_x: el.calculated_x * scale + margin,
+          calculated_y: el.calculated_y * scale + margin};
+        });
+  
+    svg.selectAll(".link").remove();
+    svg.selectAll(".nodes").remove();
+    svg.selectAll(".calcnodes").remove();
+    svg.selectAll(".realnodes").remove();
+  
+    force
+        .nodes(emptyNodes)
+        .links(graph.links)
+        .start();
+    
+    var link = svg.selectAll(".link")
+        .data(graph.links)
+      .enter().append("line")
+        .attr("class", "link")
+        .style("stroke-width", function(d) { return Math.sqrt(d.value); })
+        .attr("marker-end", "url(#end)");
+
+    var realnode = svg.selectAll(".realnodes")
+        .data(realNodes)
+        .enter().append("g").attr("class", "realnodes")
+        .attr("transform", function(d) { return "translate(" + d.x + ", " + d.y + ")"; });
+    realnode.append("circle")
+        .attr("class", "realnode")
+        .attr("r", 8)
+        .style("fill", "gray");
+    // realnode.append("text")
+    //     .attr("dx", 12)
+    //     .attr("dy", ".35em")
+    //     .text(function(d) { return d.id; })
+    //     .style("fill", "gray");
+  
+    var calcnode = svg.selectAll(".calcnodes")
+        .data(realNodes)
+        .enter().append("g").attr("class", "calcnodes")
+        .attr("transform", function(d) { return "translate(" + d.calculated_x + ", " + d.calculated_y + ")"; });
+    calcnode.append("circle")
+        .attr("class", "calcnode")
+        .attr("r", 5)
+        .style("fill", "green");
+    // calcnode.append("text")
+    //     .attr("dx", 12)
+    //     .attr("dy", ".35em")
+    //     .text(function(d) { return d.id; })
+    //     .style("fill", "green");
+
+    var node = svg.selectAll(".nodes")
+        .data(emptyNodes)
+      .enter()
+        .append("g").attr("class", function(d) { return "nodes nodes-" + d.nodetype; })
+        .call(force.drag);
+    node.append("circle")
+        .attr("class", "node")
+        .attr("r", 5)
+        .style("fill", function(d) { return color(d.nodetype); });
+    // node.append("text")
+    //     .attr("dx", 12)
+    //     .attr("dy", ".35em")
+    //     .text(function(d) { return d.id; });
+    // svg.selectAll(".nodes-2").on(".drag", null);
+
+    var calcerror = realNodes.map( function(d) {
+        return Math.pow(d.calculated_x - d.x, 2) +
+               Math.pow(d.calculated_y - d.y, 2);
+      })
+      .reduce( function(s1, s2) { return s1 + s2; }, 0);
+
+    calcerror = Math.sqrt(calcerror / realNodes.length) / scale;
+
+    tick();
+
+    var ticknum = 0;
+    function tick() {
+        link.attr("x1", function(d) { return d.source.x; })
+            .attr("y1", function(d) { return d.source.y; })
+            .attr("x2", function(d) { return d.target.x; })
+            .attr("y2", function(d) { return d.target.y; });
+
+        node.attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"});
+        if (ticknum % 20 == 0) {
+          var error = emptyNodes
+            .filter(function(el) { return el.nodetype == 1; })
+            .map( function(d, i) {
+              return Math.pow(d.x - realNodes[i].x, 2) +
+                     Math.pow(d.y - realNodes[i].y, 2);
+            })
+            .reduce( function(s1, s2) { return s1 + s2; }, 0);
+        
+          error = Math.sqrt(error / realNodes.length) / scale;
+          addError(error, calcerror);
+        }
+        ticknum++;
+      }
+      force.on("tick", tick);
+  });
+}
+updateNetwork();
+
+var marginerr = 50;
+var widtherr = width;
+var heighterr = 300;
+var svgerr = d3.select("body").append("svg")
+  .attr("height",  heighterr).attr("width", widtherr)
+  .append("g")
+    .attr("transform", "translate(" + marginerr + "," + marginerr + ")")
+
+var xScale = d3.scale.linear().range([0, widtherr - 2 * marginerr])
+var yScale = d3.scale.linear().range([heighterr - 2 * marginerr, 0])
+
+var line = d3.svg.line().interpolate("monotone")
+  .x(function(d){ return xScale(d.x); })
+  .y(function(d){ return yScale(d.y); })
+
+var renderedT = -1;
+
+function render(data){
+  var xMin = data[0][0].x;
+  var xMax = data[0][data[0].length - 1].x;
+  
+  if (xMax == renderedT) return;
+  renderedT = xMax;
+  
+  var yMax = data.reduce(function(pv, cv) {
+    var calculatedMax = cv.reduce(function(pv, cv) {
+      return Math.max(pv, cv.y);
+    }, 0);
+    return Math.max(pv, calculatedMax);
+  }, 0);
+  
+  xScale.domain([xMin, xMax]);
+  yScale.domain([0, yMax]);
+
+  var xAxis = d3.svg.axis().scale(xScale);
+  var yAxis = d3.svg.axis().scale(yScale).orient("left");
+
+  svgerr.selectAll(".y.axis").remove();
+
+  svgerr.append("g")
+    .attr("class","y axis")
+  .call(yAxis);
+
+  svgerr.selectAll(".line").remove();
+
+  var lines = svgerr.selectAll(".line")
+    .data(data)
+    .attr("class", "line");
+
+  lines.enter().append("path")
+    .attr("class", "line")
+    .attr("d", line)
+    .style("stroke","blue")
+    .style("fill","none");
+}
+
+</script>
+</body>
+</html>
